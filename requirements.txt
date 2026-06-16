@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+authlib
+bcrypt
+python-jose
+sqlalchemy
+passlib
+python-multipart
+# prometheus_client
+prometheus-fastapi-instrumentator
+# sqlite
+# prometheus-fastapi-instrumentator
