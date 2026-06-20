@@ -38,11 +38,19 @@ Instrumentator().instrument(app).expose(app)
 
 # ------------ Exception Handler ------------
 
+@app.exception_handler(APIException)
+async def api_exception_handler(request: Request, exc: APIException):
+    """Handle APIException specifically"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=exc.to_dict(),
+    )
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler for consistent error responses"""
     
-    # Handle known APIException
+    # Handle known APIException (should be caught by the specific handler above)
     if isinstance(exc, APIException):
         return JSONResponse(
             status_code=exc.status_code,
@@ -58,7 +66,8 @@ async def global_exception_handler(request: Request, exc: Exception):
                 "status_code": exc.status_code,
                 "code": _get_error_code_from_status(exc.status_code),
                 "message": str(exc.detail) if hasattr(exc, 'detail') else str(exc),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
+
             }
         )
     
@@ -72,9 +81,34 @@ async def global_exception_handler(request: Request, exc: Exception):
                 "code": "VALIDATION_ERROR",
                 "message": "Validation error",
                 "details": exc.errors(),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
+
             }
         )
+    
+    # Handle SQLAlchemy integrity errors
+    if hasattr(exc, 'orig') and hasattr(exc.orig, 'args'):
+        error_msg = str(exc.orig.args)
+        if 'UNIQUE constraint failed' in error_msg or 'Duplicate entry' in error_msg:
+            # Extract field name from error if possible
+            field = "unknown"
+            if 'username' in error_msg.lower():
+                field = "username"
+            elif 'email' in error_msg.lower():
+                field = "email"
+            
+            return JSONResponse(
+                status_code=HTTP_409_CONFLICT,
+                content={
+                    "success": False,
+                    "status_code": HTTP_409_CONFLICT,
+                    "code": "DUPLICATE_ENTRY",
+                    "message": f"{field.capitalize()} already exists",
+                    "details": {"field": field},
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+
+                }
+            )
     
     # Handle unexpected errors
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
@@ -85,7 +119,8 @@ async def global_exception_handler(request: Request, exc: Exception):
             "status_code": HTTP_500_INTERNAL_SERVER_ERROR,
             "code": "INTERNAL_SERVER_ERROR",
             "message": "An unexpected error occurred. Please try again later.",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
+
         }
     )
 
@@ -168,37 +203,24 @@ async def login_for_access_token(
         raise APIException(
             status_code=HTTP_401_UNAUTHORIZED,
             error_code=ErrorCode.INVALID_CREDENTIALS,
-            message="Invalid username or password. Please check your credentials and try again.",
-            details={"username": form_data.username}
+            message="Invalid username or password",
         )
     
-    # Check if account is locked
-    if user.account_locked:
-        raise APIException(
-            status_code=HTTP_403_FORBIDDEN,
-            error_code=ErrorCode.ACCOUNT_LOCKED,
-            message="Your account has been locked due to too many failed attempts. Please contact support.",
-            details={"user_id": user.app_user_id}
-        )
-
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    # Create access token with username in sub
     access_token = auth.create_access_token(
         data={
-            "sub": str(user.app_user_id),
+            "sub": user.username,  # Use username as sub
+            "app_user_id": str(user.app_user_id),
             "username": user.username,
             "email": user.email,
             "first_name": user.first_name,
             "last_name": user.last_name,
-            "date_of_birth": str(user.date_of_birth) if user.date_of_birth else None,
-            "gender": user.gender,
-            "roles": user.roles,
-            "mfa_enabled": user.mfa_enabled,
         },
-        expires_delta=access_token_expires
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     
     iat = datetime.now(timezone.utc)
-    expire = iat + access_token_expires
+    expire = iat + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
     return {
         "access_token": access_token,

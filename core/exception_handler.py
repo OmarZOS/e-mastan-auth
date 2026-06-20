@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -38,7 +38,7 @@ class APIException(Exception):
             "code": self.error_code.value if hasattr(self.error_code, 'value') else str(self.error_code),
             "message": self.message,
             "details": self.details,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     
 

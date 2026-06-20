@@ -1,4 +1,6 @@
 # app/crud.py
+from typing import Optional
+
 from core.exception_handler import APIException
 from core.messages import *
 from sqlalchemy.orm import Session
@@ -112,6 +114,10 @@ def change_username(db: Session, user:schemas.UserUpdate):
     
     return updated_user
 
-
+def get_user_by_app_user_id(db: Session, app_user_id: int) -> Optional[models.AppUser]:
+    """Get a user by app_user_id."""
+    return db.query(models.AppUser).filter(
+        models.AppUser.app_user_id == app_user_id
+    ).first()
 
 

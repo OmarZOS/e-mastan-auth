@@ -3,89 +3,111 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from database import models, crud, schemas
-from server import app
+from sqlalchemy.pool import StaticPool
+import time
+
+from database import models
 from database.models import Base
-import os
-from datetime import datetime
-
-# Use an in-memory SQLite database for testing
-TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", "sqlite:///./test_auth.db")
-
-# Create engine and session factory
-engine = create_engine(
-    TEST_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Override the get_db dependency in FastAPI app
 from dependencies import get_db
+from server import app
 
-def override_get_db():
-    try:
-        db = TestingSessionLocal()
-        yield db
-    finally:
-        db.close()
 
-app.dependency_overrides[get_db] = override_get_db
-
-# Fixture to create database tables before tests and drop after
-@pytest.fixture(scope="session", autouse=True)
-def create_test_db():
-    # Create tables
+@pytest.fixture(scope="function")
+def test_engine():
+    """Create test database engine"""
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
     Base.metadata.create_all(bind=engine)
-    yield
-    # Drop tables after tests
+    yield engine
     Base.metadata.drop_all(bind=engine)
 
-# Fixture for TestClient
-@pytest.fixture()
-def client():
-    with TestClient(app) as c:
-        yield c
-
-# Fixture for direct DB access
-@pytest.fixture()
-def db_session():
+@pytest.fixture(scope="function")
+def db_session(test_engine):
+    """Create a new database session for each test"""
+    TestingSessionLocal = sessionmaker(
+        autocommit=False, 
+        autoflush=False, 
+        bind=test_engine
+    )
     session = TestingSessionLocal()
     try:
         yield session
     finally:
         session.close()
 
-# In conftest.py - if you want to keep fixture approach
+@pytest.fixture(scope="function")
+def client(db_session):
+    """Create test client with database dependency override"""
+    def override_get_db():
+        try:
+            yield db_session
+        finally:
+            pass
+    
+    app.dependency_overrides[get_db] = override_get_db
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
 @pytest.fixture
-def test_user(db_session):
-    """Create a test user."""
-    from database import schemas, crud
-    from datetime import datetime
-    
-    # Delete if exists first
-    existing = crud.get_user_by_username(db_session, "testuser")
-    if existing:
-        db_session.delete(existing)
-        db_session.commit()
-    
-    user_data = schemas.UserCreate(
-        username="testuser",
-        password="password123",
-        app_user_id=1,
-        email="test@example.com",
-        login_count="0",
-        failed_login_attempts="0"
-    )
-    return crud.create_user(db_session, user_data)
-
-
-# Fixture for authentication headers
-@pytest.fixture()
-def auth_headers(client, test_user):
-    """Get authentication headers for test user."""
-    login_data = {
+def test_user_data():
+    """Sample user data for testing"""
+    return {
         "username": "testuser",
-        "password": "secret123"
+        "email": "test@example.com",
+        "password": "TestPassword123!",
+        "first_name": "Test",
+        "last_name": "User",
+        "gender": "male",
+        "phone_number": "+1234567890",
+        "app_user_id": 12345,
     }
-    response = client.post("/auth/token", data=login_data)
-    token = response.json()["access_token"]
+
+@pytest.fixture
+def test_user_credentials():
+    """Sample user credentials for login"""
+    return {
+        "username": "testuser",
+        "password": "TestPassword123!"
+    }
+
+@pytest.fixture
+def auth_header(client, test_user_data, test_user_credentials):
+    """Create authenticated user and return auth header"""
+    # Create user with unique data to avoid conflicts
+    unique_suffix = str(int(time.time() * 1000))
+    test_data = test_user_data.copy()
+    test_data["username"] = f"auth_{unique_suffix}"
+    test_data["email"] = f"auth_{unique_suffix}@example.com"
+    test_data["app_user_id"] = 12345 + int(unique_suffix) % 1000
+    
+    # Register user
+    register_response = client.post("/auth/users/", json=test_data)
+    if register_response.status_code != 200:
+        pytest.fail(f"User creation failed: {register_response.status_code} - {register_response.text}")
+    
+    # Login with the credentials
+    login_response = client.post(
+        "/auth/token",
+        data={
+            "username": test_data["username"],
+            "password": test_user_credentials["password"]
+        }
+    )
+    
+    if login_response.status_code != 200:
+        pytest.fail(f"Login failed: {login_response.status_code} - {login_response.text}")
+    
+    login_data = login_response.json()
+    token = login_data.get("access_token")
+    
+    if not token:
+        pytest.fail(f"No access token in response: {login_data}")
+    
     return {"Authorization": f"Bearer {token}"}
+
+
+
+
