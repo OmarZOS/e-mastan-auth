@@ -1,7 +1,8 @@
 # app/main.py
-from datetime import datetime 
+from datetime import datetime, timedelta, timezone
 import logging
 from core.exception_handler import APIException
+from core.error_codes import ErrorCode
 from core.messages import *
 from fastapi import FastAPI, Depends, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -13,7 +14,6 @@ import auth, dependencies
 from database import schemas, crud, models
 from database.models import engine
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import timedelta, timezone
 from prometheus_fastapi_instrumentator import Instrumentator
 
 # Create database tables
@@ -36,6 +36,7 @@ app = FastAPI(
 
 Instrumentator().instrument(app).expose(app)
 
+# ------------ Exception Handler ------------
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -43,39 +44,49 @@ async def global_exception_handler(request: Request, exc: Exception):
     
     # Handle known APIException
     if isinstance(exc, APIException):
-        resolution = schemas.API_Resolution(
-            status=exc.status,
-            error_code=exc.code,
-            message=str(exc.message),
-            details=getattr(exc, 'details', None)
-        )
         return JSONResponse(
-            status_code=exc.status,
-            content=resolution.dict(),
+            status_code=exc.status_code,
+            content=exc.to_dict(),
         )
     
     # Handle HTTP exceptions from FastAPI
     if hasattr(exc, 'status_code'):
-        resolution = schemas.API_Resolution(
-            status=exc.status_code,
-            error_code=_get_error_code_from_status(exc.status_code),
-            message=str(exc.detail) if hasattr(exc, 'detail') else str(exc),
-        )
         return JSONResponse(
             status_code=exc.status_code,
-            content=resolution.dict(),
+            content={
+                "success": False,
+                "status_code": exc.status_code,
+                "code": _get_error_code_from_status(exc.status_code),
+                "message": str(exc.detail) if hasattr(exc, 'detail') else str(exc),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+    
+    # Handle validation errors (Pydantic)
+    if hasattr(exc, 'errors') and callable(getattr(exc, 'errors', None)):
+        return JSONResponse(
+            status_code=HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "success": False,
+                "status_code": HTTP_422_UNPROCESSABLE_ENTITY,
+                "code": "VALIDATION_ERROR",
+                "message": "Validation error",
+                "details": exc.errors(),
+                "timestamp": datetime.utcnow().isoformat()
+            }
         )
     
     # Handle unexpected errors
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    resolution = schemas.API_Resolution(
-        status=HTTP_500_INTERNAL_SERVER_ERROR,
-        error_code=INTERNAL_SERVER_ERROR,
-        message="An unexpected error occurred. Please try again later.",
-    )
     return JSONResponse(
         status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-        content=resolution.dict(),
+        content={
+            "success": False,
+            "status_code": HTTP_500_INTERNAL_SERVER_ERROR,
+            "code": "INTERNAL_SERVER_ERROR",
+            "message": "An unexpected error occurred. Please try again later.",
+            "timestamp": datetime.utcnow().isoformat()
+        }
     )
 
 
@@ -97,7 +108,8 @@ def _get_error_code_from_status(status_code: int) -> str:
     return error_codes.get(status_code, "UNKNOWN_ERROR")
 
 
-# CORS Middleware
+# ------------ CORS Middleware ------------
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -107,6 +119,8 @@ app.add_middleware(
 )
 
 
+# ------------ Routes ------------
+
 @app.post("/auth/users/", response_model=schemas.UserResponse)
 def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get_db)):
     """Register a new user."""
@@ -115,7 +129,7 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get
     if db_user:
         raise APIException(
             status_code=HTTP_409_CONFLICT,
-            code=USERNAME_ALREADY_REGISTERED,
+            error_code=ErrorCode.USERNAME_ALREADY_REGISTERED,
             message="Username already registered. Please choose a different username.",
             details={"username": user.username}
         )
@@ -125,7 +139,7 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get
     if db_email:
         raise APIException(
             status_code=HTTP_409_CONFLICT,
-            code=EMAIL_ALREADY_REGISTERED,
+            error_code=ErrorCode.EMAIL_ALREADY_REGISTERED,
             message="Email already registered. Please use a different email address.",
             details={"email": user.email}
         )
@@ -136,7 +150,7 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get
         logger.error(f"Failed to create user: {e}", exc_info=True)
         raise APIException(
             status_code=HTTP_417_EXPECTATION_FAILED,
-            code=USER_CREATION_FAILED,
+            error_code=ErrorCode.USER_CREATION_FAILED,
             message="Failed to create user account. Please try again later.",
             details={"error": str(e)}
         )
@@ -153,7 +167,7 @@ async def login_for_access_token(
     if not user:
         raise APIException(
             status_code=HTTP_401_UNAUTHORIZED,
-            code=INVALID_CREDENTIALS,
+            error_code=ErrorCode.INVALID_CREDENTIALS,
             message="Invalid username or password. Please check your credentials and try again.",
             details={"username": form_data.username}
         )
@@ -162,7 +176,7 @@ async def login_for_access_token(
     if user.account_locked:
         raise APIException(
             status_code=HTTP_403_FORBIDDEN,
-            code=ACCOUNT_LOCKED,
+            error_code=ErrorCode.ACCOUNT_LOCKED,
             message="Your account has been locked due to too many failed attempts. Please contact support.",
             details={"user_id": user.app_user_id}
         )
@@ -207,7 +221,7 @@ async def read_users_me(current_user: schemas.User = Depends(auth.get_current_us
     if not current_user:
         raise APIException(
             status_code=HTTP_401_UNAUTHORIZED,
-            code=UNAUTHORIZED,
+            error_code=ErrorCode.UNAUTHORIZED,
             message="Not authenticated. Please log in to access this resource.",
         )
     return current_user
@@ -226,7 +240,7 @@ def update_user_password(
     if current_user.app_user_id != user.app_user_id:
         raise APIException(
             status_code=HTTP_403_FORBIDDEN,
-            code=UNAUTHORIZED,
+            error_code=ErrorCode.UNAUTHORIZED,
             message="You are not authorized to update this user's password.",
         )
     
@@ -237,7 +251,7 @@ def update_user_password(
         logger.error(f"Failed to update password: {e}", exc_info=True)
         raise APIException(
             status_code=HTTP_417_EXPECTATION_FAILED,
-            code=PASSWORD_UPDATE_FAILED,
+            error_code=ErrorCode.PASSWORD_UPDATE_FAILED,
             message="Failed to update password. Please try again later.",
             details={"error": str(e)}
         )
@@ -256,7 +270,7 @@ def delete_user(
     if current_user.app_user_id != user.app_user_id:
         raise APIException(
             status_code=HTTP_403_FORBIDDEN,
-            code=UNAUTHORIZED,
+            error_code=ErrorCode.UNAUTHORIZED,
             message="You are not authorized to delete this user account.",
         )
     
@@ -265,7 +279,7 @@ def delete_user(
     if not db_user:
         raise APIException(
             status_code=HTTP_404_NOT_FOUND,
-            code=USER_NOT_FOUND,
+            error_code=ErrorCode.USER_NOT_FOUND,
             message=f"User not found: {user.username}",
             details={"username": user.username}
         )
@@ -295,7 +309,7 @@ def delete_user(
         logger.error(f"Failed to delete user: {e}", exc_info=True)
         raise APIException(
             status_code=HTTP_417_EXPECTATION_FAILED,
-            code=USER_DELETION_FAILED,
+            error_code=ErrorCode.USER_DELETION_FAILED,
             message="Failed to delete user account. Please try again later.",
             details={"error": str(e)}
         )

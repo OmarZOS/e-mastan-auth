@@ -1,26 +1,45 @@
+from datetime import datetime
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from core.error_codes import ErrorCode
+from core.error_messages import get_error_message
 
-# class API_Resolution:
-#     status: int
-#     error_code: int
-#     message : str
-# # app = FastAPI()
+
+
+    
+
 
 class APIException(Exception):
-    def __init__(self, code: str,  status: int = 400,message: str="", details: dict = None):
-        self.code = code
-        self.message = message or ""
-        self.status = status
+    """Base exception for all API errors"""
+    
+    def __init__(
+        self,
+        status_code: int,
+        error_code: ErrorCode,
+        message: str = None,
+        details: dict = None,
+        headers: dict = None
+    ):
+        self.status_code = status_code
+        self.error_code = error_code
+        # Use provided message or get from error code mapping
+        self.message = message or get_error_message(error_code)
         self.details = details or {}
-
-    def to_dict(self):
+        self.headers = headers or {}
+        super().__init__(self.message)
+    
+    def to_dict(self) -> dict:
+        """Convert exception to dictionary for JSON response"""
         return {
-            "error": {
-                "code": self.code,
-                "message": self.message,
-                "status": self.status,
-                "details": self.details
-            }
+            "success": False,
+            "status_code": self.status_code,
+            "code": self.error_code.value if hasattr(self.error_code, 'value') else str(self.error_code),
+            "message": self.message,
+            "details": self.details,
+            "timestamp": datetime.utcnow().isoformat()
         }
+    
+
+    
