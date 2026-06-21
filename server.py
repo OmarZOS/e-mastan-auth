@@ -169,14 +169,15 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get
         )
     
     # Check if email already exists
-    db_email = crud.get_user_by_email(db, email=user.email)
-    if db_email:
-        raise APIException(
-            status_code=HTTP_409_CONFLICT,
-            error_code=ErrorCode.EMAIL_ALREADY_REGISTERED,
-            message="Email already registered. Please use a different email address.",
-            details={"email": user.email}
-        )
+    if user.email :
+        db_email = crud.get_user_by_email(db, email=user.email)
+        if db_email:
+            raise APIException(
+                status_code=HTTP_409_CONFLICT,
+                error_code=ErrorCode.EMAIL_ALREADY_REGISTERED,
+                message="Email already registered. Please use a different email address.",
+                details={"email": user.email}
+            )
     
     try:
         return crud.create_user(db=db, user=user)
