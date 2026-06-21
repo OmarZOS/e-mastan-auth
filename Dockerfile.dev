@@ -3,8 +3,8 @@ FROM python:3.9-slim
 # Copy the certificate files to the appropriate location in the container
 
 WORKDIR /code
-COPY certificates/cert.pem /etc/ssl/certs/cert.pem
-COPY certificates/key.pem /etc/ssl/private/key.pem
+# COPY certificates/cert.pem /etc/ssl/certs/cert.pem
+# COPY certificates/key.pem /etc/ssl/private/key.pem
 COPY requirements.txt /
 
 

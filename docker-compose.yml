@@ -14,7 +14,7 @@ services:
       dockerfile: ./Dockerfile
       args:
         - AUTH_PORT=9090
-    command: uvicorn server:app --host 0.0.0.0 --ssl-keyfile /etc/ssl/private/key.pem --ssl-certfile /etc/ssl/certs/cert.pem --port 9090 --reload # 
+    command: uvicorn server:app --host 0.0.0.0  --port 9090 --reload # 
     image: omarzos/emastan-auth
     environment:
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES}

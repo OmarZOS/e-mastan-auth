@@ -15,7 +15,7 @@ class TestUserRegistration:
         test_data["email"] = f"test_{unique_suffix}@example.com"
         test_data["app_user_id"] = 12345 + int(unique_suffix) % 1000
         
-        response = client.post("/auth/users/", json=test_data)
+        response = client.post("/auth/register", json=test_data)
         
         # Print response for debugging if needed
         if response.status_code != 200:
@@ -42,7 +42,7 @@ class TestUserRegistration:
         test_data["app_user_id"] = 12345 + int(unique_suffix) % 1000
         
         # First registration should succeed
-        response1 = client.post("/auth/users/", json=test_data)
+        response1 = client.post("/auth/register", json=test_data)
         assert response1.status_code == 200
         
         # Second registration with same username should fail
@@ -50,7 +50,7 @@ class TestUserRegistration:
         duplicate_data["email"] = f"dup2_{unique_suffix}@example.com"
         duplicate_data["app_user_id"] = 12346 + int(unique_suffix) % 1000
         
-        response2 = client.post("/auth/users/", json=duplicate_data)
+        response2 = client.post("/auth/register", json=duplicate_data)
         
         assert response2.status_code == 409
         data = response2.json()
@@ -67,7 +67,7 @@ class TestUserRegistration:
         test_data["app_user_id"] = 12345 + int(unique_suffix) % 1000
         
         # First registration should succeed
-        response1 = client.post("/auth/users/", json=test_data)
+        response1 = client.post("/auth/register", json=test_data)
         assert response1.status_code == 200
         
         # Second registration with same email should fail
@@ -75,7 +75,7 @@ class TestUserRegistration:
         duplicate_data["username"] = f"email_test2_{unique_suffix}"
         duplicate_data["app_user_id"] = 12346 + int(unique_suffix) % 1000
         
-        response2 = client.post("/auth/users/", json=duplicate_data)
+        response2 = client.post("/auth/register", json=duplicate_data)
         
         assert response2.status_code == 409
         data = response2.json()
@@ -89,7 +89,7 @@ class TestUserRegistration:
             "app_user_id": 12345,
             # Missing password field
         }
-        response = client.post("/auth/users/", json=invalid_data)
+        response = client.post("/auth/register", json=invalid_data)
         
         assert response.status_code == 422
         data = response.json()
@@ -109,7 +109,7 @@ class TestUserRegistration:
             "password": "TestPassword123!",
             "app_user_id": 12345,
         }
-        response = client.post("/auth/users/", json=invalid_data)
+        response = client.post("/auth/register", json=invalid_data)
         
         assert response.status_code == 422
         data = response.json()
@@ -130,7 +130,7 @@ class TestUserRegistration:
             "password": "123",  # Too short (< 6 characters)
             "app_user_id": 12345,
         }
-        response = client.post("/auth/users/", json=invalid_data)
+        response = client.post("/auth/register", json=invalid_data)
         
         assert response.status_code == 422
         data = response.json()
@@ -148,7 +148,7 @@ class TestUserRegistration:
         invalid_data = test_user_data.copy()
         del invalid_data["app_user_id"]
         
-        response = client.post("/auth/users/", json=invalid_data)
+        response = client.post("/auth/register", json=invalid_data)
         
         assert response.status_code == 422
         data = response.json()

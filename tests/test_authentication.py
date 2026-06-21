@@ -13,11 +13,11 @@ class TestAuthentication:
         test_data["app_user_id"] = 12345 + int(unique_suffix) % 1000
         
         # Create user
-        client.post("/auth/users/", json=test_data)
+        client.post("/auth/register", json=test_data)
         
         # Login
         response = client.post(
-            "/auth/token",
+            "/auth/login",
             data={
                 "username": test_data["username"],
                 "password": test_user_data["password"]
@@ -33,7 +33,7 @@ class TestAuthentication:
     def test_login_invalid_credentials(self, client):
         """Test login with invalid credentials"""
         response = client.post(
-            "/auth/token",
+            "/auth/login",
             data={
                 "username": "nonexistent",
                 "password": "wrongpassword"

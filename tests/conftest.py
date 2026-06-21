@@ -84,7 +84,7 @@ def auth_header(client, test_user_data, test_user_credentials):
     test_data["app_user_id"] = 12345 + int(unique_suffix) % 1000
     
     # Register user
-    register_response = client.post("/auth/users/", json=test_data)
+    register_response = client.post("/auth/register", json=test_data)
     if register_response.status_code != 200:
         pytest.fail(f"User creation failed: {register_response.status_code} - {register_response.text}")
     
@@ -109,5 +109,17 @@ def auth_header(client, test_user_data, test_user_credentials):
     return {"Authorization": f"Bearer {token}"}
 
 
-
+@pytest.fixture
+def test_user_data():
+    """Sample user data for testing"""
+    return {
+        "username": "testuser",
+        "email": "test@example.com",
+        "password": "TestPassword123!",
+        "first_name": "Test",
+        "last_name": "User",
+        "gender": "male",
+        "phone_number": "+1234567890",
+        "app_user_id": 12345,
+    }
 

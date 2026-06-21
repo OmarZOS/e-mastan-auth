@@ -153,10 +153,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ------------ Routes ------------
 
-@app.post("/auth/users/", response_model=schemas.UserResponse)
+@app.post("/auth/register", response_model=schemas.UserResponse)
 def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get_db)):
     """Register a new user."""
     # Check if username already exists
@@ -191,7 +190,7 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get
         )
 
 
-@app.post("/auth/token", response_model=schemas.Token)
+@app.post("/auth/login", response_model=schemas.Token)
 async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(), 
     db: Session = Depends(dependencies.get_db)
@@ -249,7 +248,7 @@ async def read_users_me(current_user: schemas.User = Depends(auth.get_current_us
     return current_user
 
 
-@app.post("/auth/users/update-password/", response_model=schemas.UserResponse)
+@app.post("/auth/change-password", response_model=schemas.UserResponse)
 def update_user_password(
     user: schemas.UserUpdate, 
     db: Session = Depends(dependencies.get_db),
@@ -279,7 +278,7 @@ def update_user_password(
         )
 
 
-@app.delete("/auth/users", response_model=schemas.UserResponse)
+@app.delete("/auth/delete-user", response_model=schemas.UserResponse)
 def delete_user(
     user: schemas.UserUpdate, 
     db: Session = Depends(dependencies.get_db),
