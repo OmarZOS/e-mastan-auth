@@ -197,8 +197,8 @@ class UserResponse(UserBase):
     """User response model"""
     id: int = Field(..., description="Internal user ID")
     app_user_id: int = Field(..., description="Application user ID")
-    created_at: datetime = Field(..., description="Creation timestamp")
-    updated_at: datetime = Field(..., description="Last update timestamp")
+    created_at: Optional[datetime] = Field(None, description="Creation timestamp")
+    updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
     deleted_at: Optional[datetime] = Field(None, description="Deletion timestamp")
     hashed_password: Optional[str] = Field(None, description="Hashed password (only for internal use)")
     
