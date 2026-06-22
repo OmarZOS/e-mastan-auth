@@ -15,11 +15,13 @@ import auth, dependencies
 from database import schemas, crud, models
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
+import os
 
+# ==================== Database Setup ====================
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
 
-# Configure root logger
+# ==================== Logging Configuration ====================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
@@ -27,16 +29,61 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
+# ==================== FastAPI App ====================
 app = FastAPI(
+    title="Emastan Auth Server",
+    description="Authentication server for Verdelia platforms",
+    version="1.0.0",
     openapi_url="/auth/openapi.json",
     docs_url="/auth/docs",
     redoc_url="/auth/redoc"
 )
 
-Instrumentator().instrument(app).expose(app)
+# ==================== Prometheus Instrumentation ====================
 
-# ------------ Exception Handler ------------
+# Initialize Instrumentator with default metrics
+instrumentator = Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    should_respect_env_var=True,
+    should_instrument_requests_inprogress=True,
+    excluded_handlers=[".*admin.*", "/metrics"],
+    env_var_name="ENABLE_METRICS",
+    inprogress_name="http_requests_inprogress",
+    inprogress_labels=True,
+)
+
+# Instrument the app
+instrumentator.instrument(app).expose(app, endpoint="/metrics")
+
+# Optional: Add custom metrics
+from prometheus_client import Counter, Histogram, Gauge
+
+# Custom metrics
+USER_REGISTRATIONS = Counter('auth_user_registrations_total', 'Total number of user registrations')
+USER_LOGINS = Counter('auth_user_logins_total', 'Total number of user logins')
+USER_LOGIN_FAILURES = Counter('auth_user_login_failures_total', 'Total number of failed login attempts')
+PASSWORD_CHANGES = Counter('auth_password_changes_total', 'Total number of password changes')
+USER_DELETIONS = Counter('auth_user_deletions_total', 'Total number of user deletions')
+
+AUTH_REQUEST_DURATION = Histogram(
+    'auth_request_duration_seconds',
+    'Duration of authentication requests',
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+)
+
+ACTIVE_USERS = Gauge('auth_active_users', 'Number of active users')
+
+# ==================== CORS Middleware ====================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ==================== Exception Handlers ====================
 
 @app.exception_handler(APIException)
 async def api_exception_handler(request: Request, exc: APIException):
@@ -67,7 +114,6 @@ async def global_exception_handler(request: Request, exc: Exception):
                 "code": _get_error_code_from_status(exc.status_code),
                 "message": str(exc.detail) if hasattr(exc, 'detail') else str(exc),
                 "timestamp": datetime.now(timezone.utc).isoformat()
-
             }
         )
     
@@ -82,7 +128,6 @@ async def global_exception_handler(request: Request, exc: Exception):
                 "message": "Validation error",
                 "details": exc.errors(),
                 "timestamp": datetime.now(timezone.utc).isoformat()
-
             }
         )
     
@@ -90,7 +135,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     if hasattr(exc, 'orig') and hasattr(exc.orig, 'args'):
         error_msg = str(exc.orig.args)
         if 'UNIQUE constraint failed' in error_msg or 'Duplicate entry' in error_msg:
-            # Extract field name from error if possible
             field = "unknown"
             if 'username' in error_msg.lower():
                 field = "username"
@@ -106,7 +150,6 @@ async def global_exception_handler(request: Request, exc: Exception):
                     "message": f"{field.capitalize()} already exists",
                     "details": {"field": field},
                     "timestamp": datetime.now(timezone.utc).isoformat()
-
                 }
             )
     
@@ -120,7 +163,6 @@ async def global_exception_handler(request: Request, exc: Exception):
             "code": "INTERNAL_SERVER_ERROR",
             "message": "An unexpected error occurred. Please try again later.",
             "timestamp": datetime.now(timezone.utc).isoformat()
-
         }
     )
 
@@ -143,17 +185,19 @@ def _get_error_code_from_status(status_code: int) -> str:
     return error_codes.get(status_code, "UNKNOWN_ERROR")
 
 
-# ------------ CORS Middleware ------------
+# ==================== Health Check ====================
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for container orchestration."""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "service": "Emastan-auth"
+    }
 
-# ------------ Routes ------------
+
+# ==================== Routes ====================
 
 @app.post("/auth/register", response_model=schemas.UserResponse)
 def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get_db)):
@@ -169,7 +213,7 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get
         )
     
     # Check if email already exists
-    if user.email :
+    if user.email:
         db_email = crud.get_user_by_email(db, email=user.email)
         if db_email:
             raise APIException(
@@ -180,7 +224,12 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get
             )
     
     try:
-        return crud.create_user(db=db, user=user)
+        result = crud.create_user(db=db, user=user)
+        # Increment registration counter
+        USER_REGISTRATIONS.inc()
+        # Update active users gauge
+        ACTIVE_USERS.inc()
+        return result
     except Exception as e:
         logger.error(f"Failed to create user: {e}", exc_info=True)
         raise APIException(
@@ -200,16 +249,20 @@ async def login_for_access_token(
     user = auth.authenticate_user(db, form_data.username, form_data.password)
     
     if not user:
+        USER_LOGIN_FAILURES.inc()
         raise APIException(
             status_code=HTTP_401_UNAUTHORIZED,
             error_code=ErrorCode.INVALID_CREDENTIALS,
             message="Invalid username or password",
         )
     
+    # Increment login counter
+    USER_LOGINS.inc()
+    
     # Create access token with username in sub
     access_token = auth.create_access_token(
         data={
-            "sub": user.username,  # Use username as sub
+            "sub": user.username,
             "app_user_id": str(user.app_user_id),
             "username": user.username,
             "email": user.email,
@@ -228,7 +281,7 @@ async def login_for_access_token(
         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         "iat": iat.isoformat(),
         "expires_at": expire.isoformat(),
-        "iss": "gluttex-auth-server",
+        "iss": "Emastan-auth-server",
         "app_user_id": str(user.app_user_id),
         "username": user.username,
         "email": user.email,
@@ -268,6 +321,7 @@ def update_user_password(
     
     try:
         result = crud.change_user_password(db=db, user=user)
+        PASSWORD_CHANGES.inc()
         return result
     except Exception as e:
         logger.error(f"Failed to update password: {e}", exc_info=True)
@@ -323,6 +377,8 @@ def delete_user(
     try:
         # Delete the user
         result = crud.delete_user(db=db, user=user)
+        USER_DELETIONS.inc()
+        ACTIVE_USERS.dec()
         logger.info(f"User deleted successfully: {user.username}")
         
         # Return the stored user data as confirmation
@@ -335,3 +391,21 @@ def delete_user(
             message="Failed to delete user account. Please try again later.",
             details={"error": str(e)}
         )
+
+
+# ==================== Startup/Shutdown Events ====================
+
+@app.on_event("startup")
+async def startup_event():
+    """Run on application startup."""
+    logger.info("🚀 Auth Server starting up...")
+    logger.info(f"📊 Database URL: {os.getenv('AUTH_DATABASE_URL', 'default SQLite')}")
+    logger.info(f"📈 Metrics endpoint: /metrics")
+    logger.info(f"📚 API Docs: /auth/docs")
+    logger.info("✅ Auth Server ready!")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Run on application shutdown."""
+    logger.info("🛑 Auth Server shutting down...")
