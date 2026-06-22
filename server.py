@@ -10,9 +10,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from fastapi.security import OAuth2PasswordRequestForm
 from constants import ACCESS_TOKEN_EXPIRE_MINUTES, ALLOWED_ORIGINS
+from database.database import engine
 import auth, dependencies
 from database import schemas, crud, models
-from database.models import engine
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
