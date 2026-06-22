@@ -22,6 +22,7 @@ import os
 models.Base.metadata.create_all(bind=engine)
 
 # ==================== Logging Configuration ====================
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ==================== FastAPI App ====================
 app = FastAPI(
     title="Emastan Auth Server",
-    description="Authentication server for Verdelia platforms",
+    description="Authentication server for securing platforms",
     version="1.0.0",
     openapi_url="/auth/openapi.json",
     docs_url="/auth/docs",
@@ -311,8 +312,10 @@ def update_user_password(
     """Update the password of the authenticated user."""
     logger.info(f"Password update requested for user: {user.username}")
     
+    access = current_user.roles and ("admin" in current_user.roles or "change" in current_user.roles) or (current_user.app_user_id == user.app_user_id)
+
     # Verify current user matches the update request
-    if current_user.app_user_id != user.app_user_id:
+    if not access:
         raise APIException(
             status_code=HTTP_403_FORBIDDEN,
             error_code=ErrorCode.UNAUTHORIZED,
@@ -343,7 +346,10 @@ def delete_user(
     logger.info(f"User deletion requested for: {user.username}")
     
     # Verify current user matches the deletion request
-    if current_user.app_user_id != user.app_user_id:
+    access = current_user.roles and ("admin" in current_user.roles or "delete" in current_user.roles) or (current_user.app_user_id == user.app_user_id)
+
+    # Verify current user matches the update request
+    if not access:
         raise APIException(
             status_code=HTTP_403_FORBIDDEN,
             error_code=ErrorCode.UNAUTHORIZED,
