@@ -11,8 +11,8 @@ from database import schemas
 from database.crypt import verify_password
 from constants import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY
 import database.crud as crud
-from dependencies import get_db
 from database.crypt import oauth2_scheme
+from database.database import get_db
 
 
 def authenticate_user(db: Session, username: str, password: str):

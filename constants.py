@@ -12,6 +12,11 @@ ALGORITHM = os.getenv("API_ALGORITHM", "HS256")
 # Token expiry time in minutes
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 10))
 
+
+DEFAULT_ADMIN_USERNAME = os.getenv("DEFAULT_ADMIN_USERNAME", "")
+DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "")
+
+
 # ==================== Database Configuration ====================
 
 def get_database_url() -> str:

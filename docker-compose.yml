@@ -22,6 +22,8 @@ services:
       - API_SECRET_KEY=${SECRET_KEY}
       - API_ALGORITHM=${ALGORITHM}
       - AUTH_DATABASE_URL=sqlite:///../auth_db/auth_db_data.db
+      - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME}
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD}
     ports:
       - 9090:9090
     volumes:

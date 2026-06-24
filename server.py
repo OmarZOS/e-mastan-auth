@@ -9,13 +9,15 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from fastapi.security import OAuth2PasswordRequestForm
-from constants import ACCESS_TOKEN_EXPIRE_MINUTES, ALLOWED_ORIGINS
+from constants import ACCESS_TOKEN_EXPIRE_MINUTES, ALLOWED_ORIGINS, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD
+from database import database
 from database.database import engine
-import auth, dependencies
+import auth
 from database import schemas, crud, models
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 import os
+import bcrypt
 
 # ==================== Database Setup ====================
 # Create database tables
@@ -186,6 +188,118 @@ def _get_error_code_from_status(status_code: int) -> str:
     return error_codes.get(status_code, "UNKNOWN_ERROR")
 
 
+# ==================== Helper Functions ====================
+
+def create_default_user(db: Session) -> bool:
+    """
+    Create default admin user if it doesn't exist.
+    
+    Returns:
+        True if user was created, False if user already exists or creation failed
+    """
+    try:
+        # Check if default admin already exists
+        existing_user = crud.get_user_by_username(db, username=DEFAULT_ADMIN_USERNAME)
+        if existing_user:
+            logger.info(f"Default admin user '{DEFAULT_ADMIN_USERNAME}' already exists")
+            return False
+        
+        # Create default admin user
+        default_user = schemas.UserCreate(
+            username=DEFAULT_ADMIN_USERNAME,
+            password=DEFAULT_ADMIN_PASSWORD,
+            first_name="Admin",
+            last_name="User",
+            roles="admin,superuser",
+            app_user_id=0,  # Default app_user_id for admin
+            is_active=True,
+            is_verified=True
+        )
+        
+        # Hash the password
+        hashed_password = bcrypt.hashpw(
+            DEFAULT_ADMIN_PASSWORD.encode('utf-8'), 
+            bcrypt.gensalt()
+        ).decode('utf-8')
+        
+        # Create user in database
+        db_user = models.AppUser(
+            username=default_user.username,
+            email=default_user.email,
+            hashed_password=hashed_password,
+            first_name=default_user.first_name,
+            last_name=default_user.last_name,
+            roles=default_user.roles,
+            app_user_id=default_user.app_user_id,
+            # is_active=default_user.is_active,
+            # is_verified=default_user.is_verified,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc)
+        )
+        
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+        
+        logger.info(f"✅ Default admin user created successfully:")
+        logger.info(f"   Username: {DEFAULT_ADMIN_USERNAME}")
+        logger.info(f"   Roles: {default_user.roles}")
+        logger.info(f"   App User ID: {default_user.app_user_id}")
+        logger.info(f"   Password: {DEFAULT_ADMIN_PASSWORD} (Please change this password immediately!)")
+        
+        # Update active users gauge
+        ACTIVE_USERS.inc()
+        USER_REGISTRATIONS.inc()
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to create default admin user: {e}", exc_info=True)
+        db.rollback()
+        return False
+
+
+def get_or_create_app_user(db: Session, app_user_id: int, username: str) -> bool:
+    """
+    Ensure an app_user exists for the given app_user_id.
+    This is a helper function to maintain app_user records.
+    
+    Args:
+        db: Database session
+        app_user_id: The app_user_id to check/create
+        username: The username associated with this app_user
+    
+    Returns:
+        True if app_user exists or was created, False on failure
+    """
+    try:
+        # Check if app_user already exists
+        app_user = crud.get_app_user_by_id(db, app_user_id=app_user_id)
+        if app_user:
+            logger.debug(f"App user {app_user_id} already exists")
+            return True
+        
+        # Create app_user record
+        new_app_user = models.AppUser(
+            app_user_id=app_user_id,
+            username=username,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc)
+        )
+        
+        db.add(new_app_user)
+        db.commit()
+        db.refresh(new_app_user)
+        
+        logger.info(f"✅ App user created: {app_user_id} for username: {username}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to create app user {app_user_id}: {e}", exc_info=True)
+        db.rollback()
+        return False
+
+
 # ==================== Health Check ====================
 
 @app.get("/health")
@@ -201,7 +315,7 @@ async def health_check():
 # ==================== Routes ====================
 
 @app.post("/auth/register", response_model=schemas.UserResponse)
-def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get_db)):
+def create_user(user: schemas.UserCreate, db: Session = Depends(database.get_db)):
     """Register a new user."""
     # Check if username already exists
     db_user = crud.get_user_by_username(db, username=user.username)
@@ -230,6 +344,10 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get
         USER_REGISTRATIONS.inc()
         # Update active users gauge
         ACTIVE_USERS.inc()
+        
+        # Ensure app_user exists
+        get_or_create_app_user(db, user.app_user_id, user.username)
+        
         return result
     except Exception as e:
         logger.error(f"Failed to create user: {e}", exc_info=True)
@@ -244,7 +362,7 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(dependencies.get
 @app.post("/auth/login", response_model=schemas.Token)
 async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(), 
-    db: Session = Depends(dependencies.get_db)
+    db: Session = Depends(database.get_db)
 ):
     """Authenticate user and generate access token."""
     user = auth.authenticate_user(db, form_data.username, form_data.password)
@@ -306,7 +424,7 @@ async def read_users_me(current_user: schemas.User = Depends(auth.get_current_us
 @app.post("/auth/change-password", response_model=schemas.UserResponse)
 def update_user_password(
     user: schemas.UserUpdate, 
-    db: Session = Depends(dependencies.get_db),
+    db: Session = Depends(database.get_db),
     current_user: schemas.User = Depends(auth.get_current_user)
 ):
     """Update the password of the authenticated user."""
@@ -339,7 +457,7 @@ def update_user_password(
 @app.delete("/auth/delete-user", response_model=schemas.UserResponse)
 def delete_user(
     user: schemas.UserUpdate, 
-    db: Session = Depends(dependencies.get_db),
+    db: Session = Depends(database.get_db),
     current_user: schemas.User = Depends(auth.get_current_user)
 ):
     """Delete the authenticated user."""
@@ -408,6 +526,20 @@ async def startup_event():
     logger.info(f"📊 Database URL: {os.getenv('AUTH_DATABASE_URL', 'default SQLite')}")
     logger.info(f"📈 Metrics endpoint: /metrics")
     logger.info(f"📚 API Docs: /auth/docs")
+    
+    # Create default admin user
+    db = next(database.get_db())
+    try:
+        created = create_default_user(db)
+        if created:
+            logger.info("✅ Default admin user created successfully")
+        else:
+            logger.info("ℹ️ Default admin user already exists or creation skipped")
+    except Exception as e:
+        logger.error(f"❌ Failed to create default admin user: {e}", exc_info=True)
+    finally:
+        db.close()
+    
     logger.info("✅ Auth Server ready!")
 
 
